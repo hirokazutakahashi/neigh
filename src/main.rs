@@ -2,6 +2,8 @@
 
 use clap::Parser;
 
+use std::net::ToSocketAddrs;
+
 #[derive(Parser, Debug)]
 #[command(about, long_about = None)]
 struct Args {
@@ -9,12 +11,14 @@ struct Args {
     #[arg(short, long)]
     interface: String,
 
-    /// Host name or IPv6/IPv4 address
+    /// IPv6/IPv4 address or host name
     host: String,
 }
 
 fn main() {
     let args = Args::parse();
-
     println!("{:?}", args);
+
+    let target_addr = (args.host + ":0").to_socket_addrs().unwrap().next().unwrap().ip();
+    println!("{:?}", target_addr);
 }
