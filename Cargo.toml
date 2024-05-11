@@ -6,3 +6,4 @@ description = "Simple IPv6/v4 neighbor discovery tool."
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
+pnet = "0.34.0"
