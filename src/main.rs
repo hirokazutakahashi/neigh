@@ -1,21 +1,18 @@
 //! Simple IPv6/v4 neighbor discovery tool.
 
-use std::net::ToSocketAddrs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
 use clap::Parser;
 
-use pnet::packet::{self, icmpv6};
+use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
+
+use pnet::util;
 use pnet::datalink::{Channel, MacAddr, NetworkInterface};
-use pnet::packet::icmpv6::{Icmpv6Packet, Icmpv6Type, Icmpv6Types, MutableIcmpv6Packet};
-use pnet::packet::icmpv6::ndp::{MutableNeighborAdvertPacket, MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
-use pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
-use pnet::packet::ipv6::{MutableIpv6Packet};
-use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
-use pnet::packet::ethernet::EtherTypes;
-use pnet::packet::ethernet::MutableEthernetPacket;
 use pnet::packet::{MutablePacket, Packet};
-use pnet::util::{ipv6_checksum};
+use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
+use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
+use pnet::packet::ip::{IpNextHeaderProtocols};
+use pnet::packet::ipv6::{MutableIpv6Packet};
+use pnet::packet::icmpv6::{Icmpv6Types};
+use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
 
 fn neigh_ndp(interface: NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv6()).unwrap().ip() {
@@ -52,7 +49,7 @@ fn neigh_ndp(interface: NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
 
     ns_packet.set_icmpv6_type(Icmpv6Types::NeighborSolicit);
     ns_packet.set_target_addr(target_ip);
-    ns_packet.set_checksum(ipv6_checksum(ns_packet.packet(), 1, &[], &ipv6_packet.get_source(), &ipv6_packet.get_destination(), IpNextHeaderProtocols::Icmpv6));
+    ns_packet.set_checksum(util::ipv6_checksum(ns_packet.packet(), 1, &[], &ipv6_packet.get_source(), &ipv6_packet.get_destination(), IpNextHeaderProtocols::Icmpv6));
 
     ipv6_packet.set_payload(ns_packet.packet_mut());
     ethernet_packet.set_payload(ipv6_packet.packet_mut());
@@ -161,11 +158,11 @@ fn main() {
     match target_ip {
         IpAddr::V4(ip) => {
             let target_mac = neigh_arp(interface, ip);
-            dbg!(target_mac);
+            println!("{}", target_mac);
         },
         IpAddr::V6(ip) => {
             let target_mac = neigh_ndp(interface, ip);
-            dbg!(target_mac);
+            println!("{}", target_mac);
         }
     }
 }
