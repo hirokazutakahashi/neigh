@@ -1,6 +1,7 @@
 //! Simple IPv6/v4 neighbor discovery tool.
 
 use clap::Parser;
+use pnet::ipnetwork::{IpNetwork, Ipv4Network};
 
 use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -14,7 +15,7 @@ use pnet::packet::ipv6::{MutableIpv6Packet};
 use pnet::packet::icmpv6::{Icmpv6Types};
 use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
 
-fn neigh_ndp(interface: NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
+fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv6()).unwrap().ip() {
         IpAddr::V6(ip) => ip,
         _ => unreachable!(),
@@ -77,7 +78,7 @@ fn neigh_ndp(interface: NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     // unreachable
 }
 
-fn neigh_arp(interface: NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
+fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
     let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv4()).unwrap().ip() {
         IpAddr::V4(ip) => ip,
         _ => unreachable!(),
@@ -131,12 +132,51 @@ fn neigh_arp(interface: NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
     // unreachable
 }
 
+fn match_v4(ipn: &Ipv4Network, ip: Ipv4Addr) -> bool {
+    let len = ipn.prefix() as usize / 8;
+    let octets_ipn = &ipn.ip().octets();
+    let octets_ip = &ip.octets();
+    for i in 0..len {
+        if octets_ipn[i] != octets_ip[i] {
+            return false;
+        }
+    }
+    if len == 4 {
+        return true;
+    }
+
+    let bits = ipn.prefix() % 8;
+    let mask = !((1u16 << (8 - bits)) - 1) as u8;
+    if octets_ipn[len] & mask == octets_ip[len] & mask {
+        return true;
+    }
+    false
+}
+
+fn find_interface_v4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface {
+    for interface in interfaces {
+        println!("{}", interface.name);
+        for ipn in &interface.ips {
+            match ipn {
+                IpNetwork::V4(ipn) => {
+                    println!("{}", ipn);
+                    if match_v4(ipn, target_ip) {
+                        return interface;
+                    }
+                }
+                _ => continue
+            }
+        }
+    }
+    panic!("interface not found.");
+}
+
 #[derive(Parser, Debug)]
 #[command(about, long_about = None)]
 struct CmdArgs {
     /// Network interface name
-    #[arg(short, long)]
-    interface: String,
+    #[arg(short, long, required = false)]
+    interface: Option<String>,
 
     /// IPv6/IPv4 address or host name
     host: String,
@@ -150,18 +190,23 @@ fn main() {
     dbg!(target_ip);
 
     let interfaces = pnet::datalink::interfaces();
-    let interface = interfaces
-        .into_iter()
-        .find(|iface| iface.name == args.interface)
-        .unwrap();
-
+    let interface = match args.interface {
+        Some(interfacestr) => interfaces.into_iter().find(|iface| iface.name == interfacestr).unwrap(),
+        None => match target_ip {
+            IpAddr::V4(ip) => {
+                let iiii = find_interface_v4(&interfaces, ip).clone();
+                iiii
+            },
+            IpAddr::V6(ip) => panic!("v6")
+        }
+    };
     match target_ip {
         IpAddr::V4(ip) => {
-            let target_mac = neigh_arp(interface, ip);
+            let target_mac = neigh_arp(&interface, ip);
             println!("{}", target_mac);
         },
         IpAddr::V6(ip) => {
-            let target_mac = neigh_ndp(interface, ip);
+            let target_mac = neigh_ndp(&interface, ip);
             println!("{}", target_mac);
         }
     }
