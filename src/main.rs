@@ -132,7 +132,7 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
     // unreachable
 }
 
-fn match_v4(ipn: &Ipv4Network, ip: Ipv4Addr) -> bool {
+fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
     let octets_ipn = &ipn.ip().octets();
     let octets_ip = &ip.octets();
@@ -153,14 +153,14 @@ fn match_v4(ipn: &Ipv4Network, ip: Ipv4Addr) -> bool {
     false
 }
 
-fn find_interface_v4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface {
+fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface {
     for interface in interfaces {
         println!("{}", interface.name);
         for ipn in &interface.ips {
             match ipn {
                 IpNetwork::V4(ipn) => {
                     println!("{}", ipn);
-                    if match_v4(ipn, target_ip) {
+                    if match_ipv4(*ipn, target_ip) {
                         return interface;
                     }
                 }
@@ -171,7 +171,7 @@ fn find_interface_v4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) ->
     panic!("interface not found.");
 }
 
-fn match_v6(ipn: &Ipv6Network, ip: Ipv6Addr) -> bool {
+fn match_ipv6(ipn: Ipv6Network, ip: Ipv6Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
     let octets_ipn = &ipn.ip().octets();
     let octets_ip = &ip.octets();
@@ -192,14 +192,14 @@ fn match_v6(ipn: &Ipv6Network, ip: Ipv6Addr) -> bool {
     false
 }
 
-fn find_interface_v6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> &NetworkInterface {
+fn find_interface_ipv6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> &NetworkInterface {
     for interface in interfaces {
         println!("{}", interface.name);
         for ipn in &interface.ips {
             match ipn {
                 IpNetwork::V6(ipn) => {
                     println!("{}", ipn);
-                    if match_v6(ipn, target_ip) {
+                    if match_ipv6(*ipn, target_ip) {
                         return interface;
                     }
                 }
@@ -230,18 +230,15 @@ fn main() {
 
     let interfaces = pnet::datalink::interfaces();
     let interface = match args.interface {
-        Some(interfacestr) => interfaces.into_iter().find(|iface| iface.name == interfacestr).unwrap(),
+        Some(interface_name) => interfaces.iter()
+            .find(|interface| interface.name == interface_name)
+            .unwrap(),
         None => match target_ip {
-            IpAddr::V4(ip) => {
-                let iiii = find_interface_v4(&interfaces, ip).clone();
-                iiii
-            },
-            IpAddr::V6(ip) => {
-                let iiii = find_interface_v6(&interfaces, ip).clone();
-                iiii
-            }
+            IpAddr::V4(ip) => find_interface_ipv4(&interfaces, ip),
+            IpAddr::V6(ip) => find_interface_ipv6(&interfaces, ip)
         }
     };
+
     match target_ip {
         IpAddr::V4(ip) => {
             let target_mac = neigh_arp(&interface, ip);
