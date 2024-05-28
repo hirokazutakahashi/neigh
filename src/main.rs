@@ -1,7 +1,7 @@
 //! Simple IPv6/v4 neighbor discovery tool.
 
 use clap::Parser;
-use pnet::ipnetwork::{IpNetwork, Ipv4Network};
+use pnet::ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 
 use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -171,6 +171,45 @@ fn find_interface_v4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) ->
     panic!("interface not found.");
 }
 
+fn match_v6(ipn: &Ipv6Network, ip: Ipv6Addr) -> bool {
+    let len = ipn.prefix() as usize / 8;
+    let octets_ipn = &ipn.ip().octets();
+    let octets_ip = &ip.octets();
+    for i in 0..len {
+        if octets_ipn[i] != octets_ip[i] {
+            return false;
+        }
+    }
+    if len == 16 {
+        return true;
+    }
+
+    let bits = ipn.prefix() % 8;
+    let mask = !((1u16 << (8 - bits)) - 1) as u8;
+    if octets_ipn[len] & mask == octets_ip[len] & mask {
+        return true;
+    }
+    false
+}
+
+fn find_interface_v6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> &NetworkInterface {
+    for interface in interfaces {
+        println!("{}", interface.name);
+        for ipn in &interface.ips {
+            match ipn {
+                IpNetwork::V6(ipn) => {
+                    println!("{}", ipn);
+                    if match_v6(ipn, target_ip) {
+                        return interface;
+                    }
+                }
+                _ => continue
+            }
+        }
+    }
+    panic!("interface not found.");
+}
+
 #[derive(Parser, Debug)]
 #[command(about, long_about = None)]
 struct CmdArgs {
@@ -197,7 +236,10 @@ fn main() {
                 let iiii = find_interface_v4(&interfaces, ip).clone();
                 iiii
             },
-            IpAddr::V6(ip) => panic!("v6")
+            IpAddr::V6(ip) => {
+                let iiii = find_interface_v6(&interfaces, ip).clone();
+                iiii
+            }
         }
     };
     match target_ip {
