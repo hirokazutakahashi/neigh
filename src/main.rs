@@ -8,7 +8,7 @@ use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
 use pnet::util;
 use pnet::datalink::{Channel, MacAddr, NetworkInterface};
 use pnet::packet::{MutablePacket, Packet};
-use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
+use pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
 use pnet::packet::ip::{IpNextHeaderProtocols};
 use pnet::packet::ipv6::{MutableIpv6Packet};
@@ -18,7 +18,7 @@ use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPack
 fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
     let target_ip_octets = &target_ip.octets();
     return (Ipv6Addr::new(0xff02, 0, 0, 0, 0, 1, 0xff00u16 | target_ip_octets[13] as u16, (target_ip_octets[14] as u16) << 8 | target_ip_octets[15] as u16),
-        MacAddr::new(0x33, 0x33, 0xff, target_ip_octets[13], target_ip_octets[14], target_ip_octets[15]))
+        MacAddr(0x33, 0x33, 0xff, target_ip_octets[13], target_ip_octets[14], target_ip_octets[15]));
 }
 
 fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
@@ -73,7 +73,8 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
 
     loop {
         let buf = receiver.next().unwrap();
-        if buf.len() >= 14 + 40 + 24 {
+        if buf.len() >= 14 + 40 + 24 { // should implement timeout functionality
+            let ethernet_packet = EthernetPacket::new(&buf).unwrap();
             let na_packet = NeighborAdvertPacket::new(&buf[54..]).unwrap();
             if na_packet.get_icmpv6_type() == Icmpv6Types::NeighborAdvert && na_packet.get_target_addr() == target_ip {
                 for ndp_option in na_packet.get_options_iter() {
@@ -82,6 +83,7 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
                         return MacAddr(r[2], r[3], r[4], r[5], r[6], r[7]);
                     }
                 }
+                return ethernet_packet.get_source();
             }
         }
     }
