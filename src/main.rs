@@ -15,6 +15,12 @@ use pnet::packet::ipv6::{MutableIpv6Packet};
 use pnet::packet::icmpv6::{Icmpv6Types};
 use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
 
+fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
+    let target_ip_octets = &target_ip.octets();
+    return (Ipv6Addr::new(0xff02, 0, 0, 0, 0, 1, 0xff00u16 | target_ip_octets[13] as u16, (target_ip_octets[14] as u16) << 8 | target_ip_octets[15] as u16),
+        MacAddr::new(0x33, 0x33, 0xff, target_ip_octets[13], target_ip_octets[14], target_ip_octets[15]))
+}
+
 fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv6()).unwrap().ip() {
         IpAddr::V6(ip) => ip,
@@ -28,10 +34,14 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
         Err(e) => panic!("Error happened {}", e),
     };
 
+    let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
+    dbg!(snmcastaddr_ipv6);
+    dbg!(snmcastaddr_mac);
+
     let mut ethernet_buffer = [0u8; 14+40+24]; // Ethernet 14 + IPv6 40 + NS 24
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
 
-    ethernet_packet.set_destination(MacAddr::broadcast()); // Shoud be Multicast.
+    ethernet_packet.set_destination(snmcastaddr_mac);
     ethernet_packet.set_source(interface.mac.unwrap());
     ethernet_packet.set_ethertype(EtherTypes::Ipv6);
 
@@ -43,7 +53,7 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     ipv6_packet.set_next_header(IpNextHeaderProtocols::Icmpv6);
     ipv6_packet.set_hop_limit(0xff);
     ipv6_packet.set_source(source_ip);
-    ipv6_packet.set_destination(Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1)); //Shoud be Solicited-node multicast address.
+    ipv6_packet.set_destination(snmcastaddr_ipv6);
 
     let mut ns_buffer = [0u8; 24]; // Any macro for packet size?
     let mut ns_packet = MutableNeighborSolicitPacket::new(&mut ns_buffer).unwrap();
