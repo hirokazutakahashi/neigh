@@ -15,6 +15,48 @@ use pnet::packet::ipv6::{MutableIpv6Packet};
 use pnet::packet::icmpv6::{Icmpv6Types};
 use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
 
+fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
+    let len = ipn.prefix() as usize / 8;
+    let octets_ipn = &ipn.ip().octets();
+    let octets_ip = &ip.octets();
+    for i in 0..len {
+        if octets_ipn[i] != octets_ip[i] {
+            return false;
+        }
+    }
+    if len == 4 {
+        return true;
+    }
+
+    let bits = ipn.prefix() % 8;
+    let mask = !((1u16 << (8 - bits)) - 1) as u8;
+    if octets_ipn[len] & mask == octets_ip[len] & mask {
+        return true;
+    }
+    false
+}
+
+fn match_ipv6(ipn: Ipv6Network, ip: Ipv6Addr) -> bool {
+    let len = ipn.prefix() as usize / 8;
+    let octets_ipn = &ipn.ip().octets();
+    let octets_ip = &ip.octets();
+    for i in 0..len {
+        if octets_ipn[i] != octets_ip[i] {
+            return false;
+        }
+    }
+    if len == 16 {
+        return true;
+    }
+
+    let bits = ipn.prefix() % 8;
+    let mask = !((1u16 << (8 - bits)) - 1) as u8;
+    if octets_ipn[len] & mask == octets_ip[len] & mask {
+        return true;
+    }
+    false
+}
+
 fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
     let target_ip_octets = &target_ip.octets();
     return (Ipv6Addr::new(0xff02, 0, 0, 0, 0, 1, 0xff00u16 | target_ip_octets[13] as u16, (target_ip_octets[14] as u16) << 8 | target_ip_octets[15] as u16),
@@ -91,9 +133,21 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
 }
 
 fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
-    let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv4()).unwrap().ip() {
-        IpAddr::V4(ip) => ip,
-        _ => unreachable!(),
+    let mut source_ip: Option<Ipv4Addr> = None;
+    for ipn in &interface.ips {
+        match ipn {
+            IpNetwork::V4(ipn) => {
+                source_ip = Some(ipn.ip());
+                if match_ipv4(*ipn, target_ip) {
+                    break;
+                }
+            },
+            _ => continue
+        }
+    }
+    let source_ip = match source_ip {
+        Some(ip) => ip,
+        None => panic!("interface not found.")
     };
 
     let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
@@ -144,28 +198,7 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
     // unreachable
 }
 
-fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
-    let len = ipn.prefix() as usize / 8;
-    let octets_ipn = &ipn.ip().octets();
-    let octets_ip = &ip.octets();
-    for i in 0..len {
-        if octets_ipn[i] != octets_ip[i] {
-            return false;
-        }
-    }
-    if len == 4 {
-        return true;
-    }
-
-    let bits = ipn.prefix() % 8;
-    let mask = !((1u16 << (8 - bits)) - 1) as u8;
-    if octets_ipn[len] & mask == octets_ip[len] & mask {
-        return true;
-    }
-    false
-}
-
-fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface {
+fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface { // Shoud be Option<NetworkInterface>
     for interface in interfaces {
         println!("{}", interface.name);
         for ipn in &interface.ips {
@@ -181,27 +214,6 @@ fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) 
         }
     }
     panic!("interface not found.");
-}
-
-fn match_ipv6(ipn: Ipv6Network, ip: Ipv6Addr) -> bool {
-    let len = ipn.prefix() as usize / 8;
-    let octets_ipn = &ipn.ip().octets();
-    let octets_ip = &ip.octets();
-    for i in 0..len {
-        if octets_ipn[i] != octets_ip[i] {
-            return false;
-        }
-    }
-    if len == 16 {
-        return true;
-    }
-
-    let bits = ipn.prefix() % 8;
-    let mask = !((1u16 << (8 - bits)) - 1) as u8;
-    if octets_ipn[len] & mask == octets_ip[len] & mask {
-        return true;
-    }
-    false
 }
 
 fn find_interface_ipv6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> &NetworkInterface {
