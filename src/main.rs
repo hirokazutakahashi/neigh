@@ -64,9 +64,21 @@ fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
 }
 
 fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
-    let source_ip = match interface.ips.iter().find(|ip| ip.is_ipv6()).unwrap().ip() {
-        IpAddr::V6(ip) => ip,
-        _ => unreachable!(),
+    let mut source_ip: Option<Ipv6Addr> = None;
+    for ipn in &interface.ips {
+        match ipn {
+            IpNetwork::V6(ipn) => {
+                source_ip = Some(ipn.ip());
+                if match_ipv6(*ipn, target_ip) {
+                    break;
+                }
+            },
+            _ => continue
+        }
+    }
+    let source_ip = match source_ip {
+        Some(ip) => ip,
+        None => panic!("interface not found.")
     };
     dbg!(source_ip);
 
@@ -132,7 +144,7 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     // unreachable
 }
 
-fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
+fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr { // Should be Oprion<MacAddr> ?
     let mut source_ip: Option<Ipv4Addr> = None;
     for ipn in &interface.ips {
         match ipn {
@@ -149,6 +161,7 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
         Some(ip) => ip,
         None => panic!("interface not found.")
     };
+    dbg!(source_ip);
 
     let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
         Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
@@ -185,7 +198,7 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr {
 
     dbg!("Sent ARP request");
 
-    loop {
+    loop { // Should implement timeout feature
         let buf = receiver.next().unwrap();
         let arp = ArpPacket::new(&buf[MutableEthernetPacket::minimum_packet_size()..]).unwrap();
         if arp.get_sender_proto_addr() == target_ip
