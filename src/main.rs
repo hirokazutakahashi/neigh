@@ -13,7 +13,7 @@ use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPa
 use pnet::packet::ip::{IpNextHeaderProtocols};
 use pnet::packet::ipv6::{MutableIpv6Packet};
 use pnet::packet::icmpv6::{Icmpv6Types};
-use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOptionTypes};
+use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NdpOption, NdpOptionTypes, NeighborAdvertPacket};
 
 fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
@@ -92,28 +92,34 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     dbg!(snmcastaddr_ipv6);
     dbg!(snmcastaddr_mac);
 
-    let mut ethernet_buffer = [0u8; 14+40+24]; // Ethernet 14 + IPv6 40 + NS 24
+    let mut ethernet_buffer = [0u8; 14+40+24+8]; // Ethernet 14 + IPv6 40 + NS 24 + LLoption 8
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
 
     ethernet_packet.set_destination(snmcastaddr_mac);
     ethernet_packet.set_source(interface.mac.unwrap());
     ethernet_packet.set_ethertype(EtherTypes::Ipv6);
 
-    let mut ipv6_buffer = [0u8; 40+24]; // Any macro for packet size?
+    let mut ipv6_buffer = [0u8; 40+24+8]; // Any macro for packet size?
     let mut ipv6_packet = MutableIpv6Packet::new(&mut ipv6_buffer).unwrap();
 
     ipv6_packet.set_version(6);
-    ipv6_packet.set_payload_length(24);
+    ipv6_packet.set_payload_length(24+8);
     ipv6_packet.set_next_header(IpNextHeaderProtocols::Icmpv6);
     ipv6_packet.set_hop_limit(0xff);
     ipv6_packet.set_source(source_ip);
     ipv6_packet.set_destination(snmcastaddr_ipv6);
 
-    let mut ns_buffer = [0u8; 24]; // Any macro for packet size?
+    let mut ns_buffer = [0u8; 24+8]; // Any macro for packet size?
     let mut ns_packet = MutableNeighborSolicitPacket::new(&mut ns_buffer).unwrap();
 
     ns_packet.set_icmpv6_type(Icmpv6Types::NeighborSolicit);
     ns_packet.set_target_addr(target_ip);
+    let slladdr_ndpopt = NdpOption {
+        option_type: NdpOptionTypes::SourceLLAddr,
+        length: 1,
+        data: interface.mac.unwrap().octets().to_vec()
+    };
+    ns_packet.set_options(&[slladdr_ndpopt]);
     ns_packet.set_checksum(util::ipv6_checksum(ns_packet.packet(), 1, &[], &ipv6_packet.get_source(), &ipv6_packet.get_destination(), IpNextHeaderProtocols::Icmpv6));
 
     ipv6_packet.set_payload(ns_packet.packet_mut());
