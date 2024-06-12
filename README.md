@@ -26,6 +26,11 @@ Manually specify network interface.
 ./neigh -i en0 192.0.2.1
 ```
 
+Can also be specified by host name.
+```bash
+./neigh gw4.example.org
+```
+
 ### IPv6 NDP
 
 Automatic selection of network interfaces.
@@ -36,4 +41,9 @@ Automatic selection of network interfaces.
 Manually specify network interface.
 ```bash
 ./neigh -i en0 2001:db8::1
+```
+
+Can also be specified by host name.
+```bash
+./neigh gw6.example.org
 ```
