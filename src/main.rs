@@ -1,6 +1,7 @@
 //! Simple IPv6/v4 neighbor discovery tool.
 
 use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
+use std::process;
 
 use clap::Parser;
 
@@ -82,12 +83,6 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
 
     let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
 
-    let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
-        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => {return Err("Unknown channel type.".to_owned());},
-        Err(e) => {return Err(e.to_string());}
-    };
-
     let mut ethernet_buffer = [0u8; 14+40+24+8]; // Ethernet 14 + IPv6 40 + NS 24 + LLoption 8
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
 
@@ -121,6 +116,12 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
     ipv6_packet.set_payload(ns_packet.packet_mut());
     ethernet_packet.set_payload(ipv6_packet.packet_mut());
 
+    let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
+        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+        Ok(_) => {return Err("Unknown channel type.".to_owned());},
+        Err(e) => {return Err(e.to_string());}
+    };
+
     match sender.send_to(ethernet_packet.packet(), None) {
         Some(result) => result.map_err(|err| err.to_string())?,
         None => {return Err("Can't send packet.".to_string());}
@@ -145,7 +146,9 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
     // unreachable
 }
 
-fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr { // Should be Oprion<MacAddr> ?
+fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> Result<MacAddr, String> {
+    let source_mac = interface.mac.ok_or("Network interface has no MAC address.")?;
+
     let mut source_ip: Option<Ipv4Addr> = None;
     for ipn in &interface.ips {
         match ipn {
@@ -158,94 +161,83 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> MacAddr { // 
             _ => continue
         }
     }
-    let source_ip = match source_ip {
-        Some(ip) => ip,
-        None => panic!("interface not found.")
-    };
-    dbg!(source_ip);
-
-    let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
-        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unknown channel type"),
-        Err(e) => panic!("Error happened {}", e),
-    };
+    let source_ip = source_ip.ok_or("Interace not found.".to_owned())?;
 
     let mut ethernet_buffer = [0u8; 42];
-    let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
+    let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
 
     ethernet_packet.set_destination(MacAddr::broadcast());
-    ethernet_packet.set_source(interface.mac.unwrap());
+    ethernet_packet.set_source(source_mac);
     ethernet_packet.set_ethertype(EtherTypes::Arp);
 
     let mut arp_buffer = [0u8; 28];
-    let mut arp_packet = MutableArpPacket::new(&mut arp_buffer).unwrap();
+    let mut arp_packet = MutableArpPacket::new(&mut arp_buffer).ok_or("Can't allocate ARP packet.".to_owned())?;
 
     arp_packet.set_hardware_type(ArpHardwareTypes::Ethernet);
     arp_packet.set_protocol_type(EtherTypes::Ipv4);
     arp_packet.set_hw_addr_len(6);
     arp_packet.set_proto_addr_len(4);
     arp_packet.set_operation(ArpOperations::Request);
-    arp_packet.set_sender_hw_addr(interface.mac.unwrap());
+    arp_packet.set_sender_hw_addr(source_mac);
     arp_packet.set_sender_proto_addr(source_ip);
     arp_packet.set_target_hw_addr(MacAddr::zero());
     arp_packet.set_target_proto_addr(target_ip);
 
     ethernet_packet.set_payload(arp_packet.packet_mut());
 
-    sender
-        .send_to(ethernet_packet.packet(), None)
-        .unwrap()
-        .unwrap();
+    let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
+        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+        Ok(_) => {return Err("Unknown channel type.".to_owned());},
+        Err(e) => {return Err(e.to_string());}
+    };
 
-    dbg!("Sent ARP request");
+    match sender.send_to(ethernet_packet.packet(), None) {
+        Some(result) => result.map_err(|err| err.to_string())?,
+        None => {return Err("Can't send packet.".to_string());}
+    }
 
-    loop { // Should implement timeout feature
+    loop {
         let buf = receiver.next().unwrap();
-        let arp = ArpPacket::new(&buf[MutableEthernetPacket::minimum_packet_size()..]).unwrap();
+        let arp = ArpPacket::new(&buf[MutableEthernetPacket::minimum_packet_size()..]).ok_or("Can't allocate ARP packet.".to_owned())?;
         if arp.get_sender_proto_addr() == target_ip
-            && arp.get_target_hw_addr() == interface.mac.unwrap()
+            && arp.get_target_hw_addr() == source_mac
         {
-            dbg!("Received reply");
-            return arp.get_sender_hw_addr();
+            return Ok(arp.get_sender_hw_addr());
         }
     }
     // unreachable
 }
 
-fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> &NetworkInterface { // Shoud be Option<NetworkInterface>
+fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> Result<&NetworkInterface, String> {
     for interface in interfaces {
-        println!("{}", interface.name);
         for ipn in &interface.ips {
             match ipn {
                 IpNetwork::V4(ipn) => {
-                    println!("{}", ipn);
                     if match_ipv4(*ipn, target_ip) {
-                        return interface;
+                        return Ok(interface);
                     }
                 }
                 _ => continue
             }
         }
     }
-    panic!("interface not found.");
+    Err("Interface not found.".to_owned())
 }
 
-fn find_interface_ipv6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> &NetworkInterface {
+fn find_interface_ipv6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> Result<&NetworkInterface, String> {
     for interface in interfaces {
-        println!("{}", interface.name);
         for ipn in &interface.ips {
             match ipn {
                 IpNetwork::V6(ipn) => {
-                    println!("{}", ipn);
                     if match_ipv6(*ipn, target_ip) {
-                        return interface;
+                        return Ok(interface);
                     }
                 }
                 _ => continue
             }
         }
     }
-    panic!("interface not found.");
+    Err("Interface not found.".to_owned())
 }
 
 #[derive(Parser, Debug)]
@@ -272,15 +264,23 @@ fn main() {
             .find(|interface| interface.name == interface_name)
             .unwrap(),
         None => match target_ip {
-            IpAddr::V4(ip) => find_interface_ipv4(&interfaces, ip),
-            IpAddr::V6(ip) => find_interface_ipv6(&interfaces, ip)
+            IpAddr::V4(ip) => match find_interface_ipv4(&interfaces, ip) {
+                Ok(interface) => interface,
+                Err(msg) => {eprintln!("{}", msg); process::exit(1);}
+            },
+            IpAddr::V6(ip) => match find_interface_ipv6(&interfaces, ip) {
+                Ok(interface) => interface,
+                Err(msg) => {eprintln!("{}", msg); process::exit(1);}
+            }
         }
     };
 
     match target_ip {
         IpAddr::V4(ip) => {
-            let target_mac = neigh_arp(&interface, ip);
-            println!("{}", target_mac);
+            match neigh_arp(&interface, ip) {
+                Ok(target_mac) => {println!("{}", target_mac);},
+                Err(msg) => {eprintln!("{}", msg);}
+            }
         },
         IpAddr::V6(ip) => {
             match neigh_ndp(&interface, ip) {
