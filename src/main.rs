@@ -14,7 +14,14 @@ use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPa
 use pnet::packet::ip::{IpNextHeaderProtocols};
 use pnet::packet::ipv6::{MutableIpv6Packet};
 use pnet::packet::icmpv6::{Icmpv6Types};
-use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NdpOption, NdpOptionTypes, NeighborAdvertPacket};
+use pnet::packet::icmpv6::ndp::{MutableNeighborSolicitPacket, NeighborAdvertPacket, NdpOption, NdpOptionTypes};
+
+const PACKETSZ_ETHERNET: usize = EthernetPacket::minimum_packet_size();
+const PACKETSZ_ARP: usize = MutableArpPacket::minimum_packet_size();
+const PACKETSZ_IPV6: usize = MutableIpv6Packet::minimum_packet_size();
+const PACKETSZ_NS: usize = MutableNeighborSolicitPacket::minimum_packet_size();
+const PACKETSZ_NA: usize = NeighborAdvertPacket::minimum_packet_size();
+const PACKETSZ_SOURCELLADDR: usize = 8;
 
 fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
@@ -83,24 +90,24 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
 
     let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
 
-    let mut ethernet_buffer = [0u8; 14+40+24+8]; // Ethernet 14 + IPv6 40 + NS 24 + LLoption 8
+    let mut ethernet_buffer = [0u8; PACKETSZ_ETHERNET + PACKETSZ_IPV6 + PACKETSZ_NS + PACKETSZ_SOURCELLADDR];
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
 
     ethernet_packet.set_destination(snmcastaddr_mac);
     ethernet_packet.set_source(source_mac);
     ethernet_packet.set_ethertype(EtherTypes::Ipv6);
 
-    let mut ipv6_buffer = [0u8; 40+24+8]; // Any macro for packet size?
+    let mut ipv6_buffer = [0u8; PACKETSZ_IPV6 + PACKETSZ_NS + PACKETSZ_SOURCELLADDR];
     let mut ipv6_packet = MutableIpv6Packet::new(&mut ipv6_buffer).ok_or("Can't allocate IPv6 packet.".to_owned())?;
 
     ipv6_packet.set_version(6);
-    ipv6_packet.set_payload_length(24+8);
+    ipv6_packet.set_payload_length((PACKETSZ_NS + PACKETSZ_SOURCELLADDR) as u16);
     ipv6_packet.set_next_header(IpNextHeaderProtocols::Icmpv6);
     ipv6_packet.set_hop_limit(0xff);
     ipv6_packet.set_source(source_ip);
     ipv6_packet.set_destination(snmcastaddr_ipv6);
 
-    let mut ns_buffer = [0u8; 24+8]; // Any macro for packet size?
+    let mut ns_buffer = [0u8; PACKETSZ_NS + PACKETSZ_SOURCELLADDR];
     let mut ns_packet = MutableNeighborSolicitPacket::new(&mut ns_buffer).ok_or("Can't allocate ICMPv6 packet.".to_owned())?;
 
     ns_packet.set_icmpv6_type(Icmpv6Types::NeighborSolicit);
@@ -129,7 +136,7 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
 
     loop {
         let buf = receiver.next().map_err(|err| err.to_string())?;
-        if buf.len() >= 14 + 40 + 24 { // should implement timeout functionality
+        if buf.len() >= PACKETSZ_ETHERNET + PACKETSZ_IPV6 + PACKETSZ_NA {
             let ethernet_packet = EthernetPacket::new(&buf).ok_or("Can't allocate Ethernet packet.".to_owned())?;
             let na_packet = NeighborAdvertPacket::new(&buf[54..]).ok_or("Can't allocate ICMPv6 packet.".to_owned())?;
             if na_packet.get_icmpv6_type() == Icmpv6Types::NeighborAdvert && na_packet.get_target_addr() == target_ip {
@@ -163,14 +170,14 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> Result<MacAdd
     }
     let source_ip = source_ip.ok_or("Interace not found.".to_owned())?;
 
-    let mut ethernet_buffer = [0u8; 42];
+    let mut ethernet_buffer = [0u8; PACKETSZ_ETHERNET + PACKETSZ_ARP];
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
 
     ethernet_packet.set_destination(MacAddr::broadcast());
     ethernet_packet.set_source(source_mac);
     ethernet_packet.set_ethertype(EtherTypes::Arp);
 
-    let mut arp_buffer = [0u8; 28];
+    let mut arp_buffer = [0u8; PACKETSZ_ARP];
     let mut arp_packet = MutableArpPacket::new(&mut arp_buffer).ok_or("Can't allocate ARP packet.".to_owned())?;
 
     arp_packet.set_hardware_type(ArpHardwareTypes::Ethernet);
@@ -253,10 +260,15 @@ struct CmdArgs {
 
 fn main() {
     let args = CmdArgs::parse();
-    dbg!(&args);
 
-    let target_ip = (args.host + ":0").to_socket_addrs().unwrap().next().unwrap().ip();
-    dbg!(target_ip);
+    let mut target_ips = match (args.host + ":0").to_socket_addrs() {
+        Ok(sockaddrs) => sockaddrs,
+        _ => {eprintln!("{}", "Can't convert to IP address."); process::exit(1);}
+    };
+    let target_ip = match target_ips.next() {
+        Some(ip) => ip.ip(),
+        None => {eprintln!("{}", "Can't convert to IP address."); process::exit(1);}
+    };
 
     let interfaces = pnet::datalink::interfaces();
     let interface = match args.interface {
