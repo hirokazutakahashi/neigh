@@ -1,12 +1,12 @@
 //! Simple IPv6/v4 neighbor discovery tool.
 
-use clap::Parser;
-use pnet::ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
-
 use std::net::{ToSocketAddrs, IpAddr, Ipv4Addr, Ipv6Addr};
+
+use clap::Parser;
 
 use pnet::util;
 use pnet::datalink::{Channel, MacAddr, NetworkInterface};
+use pnet::ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
 use pnet::packet::{MutablePacket, Packet};
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
@@ -63,7 +63,9 @@ fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
         MacAddr(0x33, 0x33, 0xff, target_ip_octets[13], target_ip_octets[14], target_ip_octets[15]));
 }
 
-fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
+fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAddr, String> {
+    let source_mac = interface.mac.ok_or("Network interface has no MAC address.")?;
+
     let mut source_ip: Option<Ipv6Addr> = None;
     for ipn in &interface.ips {
         match ipn {
@@ -76,31 +78,25 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
             _ => continue
         }
     }
-    let source_ip = match source_ip {
-        Some(ip) => ip,
-        None => panic!("interface not found.")
-    };
-    dbg!(source_ip);
+    let source_ip = source_ip.ok_or("Interace not found.".to_owned())?;
+
+    let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
 
     let (mut sender, mut receiver) = match pnet::datalink::channel(&interface, Default::default()) {
         Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unknown channel type"),
-        Err(e) => panic!("Error happened {}", e),
+        Ok(_) => {return Err("Unknown channel type.".to_owned());},
+        Err(e) => {return Err(e.to_string());}
     };
 
-    let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
-    dbg!(snmcastaddr_ipv6);
-    dbg!(snmcastaddr_mac);
-
     let mut ethernet_buffer = [0u8; 14+40+24+8]; // Ethernet 14 + IPv6 40 + NS 24 + LLoption 8
-    let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).unwrap();
+    let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
 
     ethernet_packet.set_destination(snmcastaddr_mac);
-    ethernet_packet.set_source(interface.mac.unwrap());
+    ethernet_packet.set_source(source_mac);
     ethernet_packet.set_ethertype(EtherTypes::Ipv6);
 
     let mut ipv6_buffer = [0u8; 40+24+8]; // Any macro for packet size?
-    let mut ipv6_packet = MutableIpv6Packet::new(&mut ipv6_buffer).unwrap();
+    let mut ipv6_packet = MutableIpv6Packet::new(&mut ipv6_buffer).ok_or("Can't allocate IPv6 packet.".to_owned())?;
 
     ipv6_packet.set_version(6);
     ipv6_packet.set_payload_length(24+8);
@@ -110,14 +106,14 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     ipv6_packet.set_destination(snmcastaddr_ipv6);
 
     let mut ns_buffer = [0u8; 24+8]; // Any macro for packet size?
-    let mut ns_packet = MutableNeighborSolicitPacket::new(&mut ns_buffer).unwrap();
+    let mut ns_packet = MutableNeighborSolicitPacket::new(&mut ns_buffer).ok_or("Can't allocate ICMPv6 packet.".to_owned())?;
 
     ns_packet.set_icmpv6_type(Icmpv6Types::NeighborSolicit);
     ns_packet.set_target_addr(target_ip);
     let slladdr_ndpopt = NdpOption {
         option_type: NdpOptionTypes::SourceLLAddr,
         length: 1,
-        data: interface.mac.unwrap().octets().to_vec()
+        data: source_mac.octets().to_vec()
     };
     ns_packet.set_options(&[slladdr_ndpopt]);
     ns_packet.set_checksum(util::ipv6_checksum(ns_packet.packet(), 1, &[], &ipv6_packet.get_source(), &ipv6_packet.get_destination(), IpNextHeaderProtocols::Icmpv6));
@@ -125,25 +121,24 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> MacAddr {
     ipv6_packet.set_payload(ns_packet.packet_mut());
     ethernet_packet.set_payload(ipv6_packet.packet_mut());
 
-    sender
-        .send_to(ethernet_packet.packet(), None)
-        .unwrap()
-        .unwrap();
-    dbg!("Sent NS");
+    match sender.send_to(ethernet_packet.packet(), None) {
+        Some(result) => result.map_err(|err| err.to_string())?,
+        None => {return Err("Can't send packet.".to_string());}
+    }
 
     loop {
-        let buf = receiver.next().unwrap();
+        let buf = receiver.next().map_err(|err| err.to_string())?;
         if buf.len() >= 14 + 40 + 24 { // should implement timeout functionality
-            let ethernet_packet = EthernetPacket::new(&buf).unwrap();
-            let na_packet = NeighborAdvertPacket::new(&buf[54..]).unwrap();
+            let ethernet_packet = EthernetPacket::new(&buf).ok_or("Can't allocate Ethernet packet.".to_owned())?;
+            let na_packet = NeighborAdvertPacket::new(&buf[54..]).ok_or("Can't allocate ICMPv6 packet.".to_owned())?;
             if na_packet.get_icmpv6_type() == Icmpv6Types::NeighborAdvert && na_packet.get_target_addr() == target_ip {
                 for ndp_option in na_packet.get_options_iter() {
                     if ndp_option.get_option_type() == NdpOptionTypes::TargetLLAddr {
-                        let r = ndp_option.packet();
-                        return MacAddr(r[2], r[3], r[4], r[5], r[6], r[7]);
+                        let p = ndp_option.packet();
+                        return Ok(MacAddr(p[2], p[3], p[4], p[5], p[6], p[7]));
                     }
                 }
-                return ethernet_packet.get_source();
+                return Ok(ethernet_packet.get_source());
             }
         }
     }
@@ -288,8 +283,10 @@ fn main() {
             println!("{}", target_mac);
         },
         IpAddr::V6(ip) => {
-            let target_mac = neigh_ndp(&interface, ip);
-            println!("{}", target_mac);
+            match neigh_ndp(&interface, ip) {
+                Ok(target_mac) => {println!("{}", target_mac);},
+                Err(msg) => {eprintln!("{}", msg);}
+            }
         }
     }
 }
