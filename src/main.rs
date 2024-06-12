@@ -23,6 +23,7 @@ const PACKETSZ_NS: usize = MutableNeighborSolicitPacket::minimum_packet_size();
 const PACKETSZ_NA: usize = NeighborAdvertPacket::minimum_packet_size();
 const PACKETSZ_SOURCELLADDR: usize = 8;
 
+/// IPv4 prefix matching.
 fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
     let octets_ipn = &ipn.ip().octets();
@@ -44,6 +45,7 @@ fn match_ipv4(ipn: Ipv4Network, ip: Ipv4Addr) -> bool {
     false
 }
 
+/// IPv6 prefix matching.
 fn match_ipv6(ipn: Ipv6Network, ip: Ipv6Addr) -> bool {
     let len = ipn.prefix() as usize / 8;
     let octets_ipn = &ipn.ip().octets();
@@ -65,12 +67,14 @@ fn match_ipv6(ipn: Ipv6Network, ip: Ipv6Addr) -> bool {
     false
 }
 
+/// Generate solicited-node multicast address for IPv6 and Ethernet.
 fn snmcastaddr(target_ip: Ipv6Addr) -> (Ipv6Addr, MacAddr) {
     let target_ip_octets = &target_ip.octets();
     return (Ipv6Addr::new(0xff02, 0, 0, 0, 0, 1, 0xff00u16 | target_ip_octets[13] as u16, (target_ip_octets[14] as u16) << 8 | target_ip_octets[15] as u16),
         MacAddr(0x33, 0x33, 0xff, target_ip_octets[13], target_ip_octets[14], target_ip_octets[15]));
 }
 
+/// IPv6 NDP.
 fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAddr, String> {
     let source_mac = interface.mac.ok_or("Network interface has no MAC address.")?;
 
@@ -86,7 +90,7 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
             _ => continue
         }
     }
-    let source_ip = source_ip.ok_or("Interace not found.".to_owned())?;
+    let source_ip = source_ip.ok_or("IP address not configured.".to_owned())?;
 
     let (snmcastaddr_ipv6, snmcastaddr_mac) = snmcastaddr(target_ip);
 
@@ -150,9 +154,10 @@ fn neigh_ndp(interface: &NetworkInterface, target_ip: Ipv6Addr) -> Result<MacAdd
             }
         }
     }
-    // unreachable
+    // Unreachable.
 }
 
+/// IPv4 ARP.
 fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> Result<MacAddr, String> {
     let source_mac = interface.mac.ok_or("Network interface has no MAC address.")?;
 
@@ -168,7 +173,7 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> Result<MacAdd
             _ => continue
         }
     }
-    let source_ip = source_ip.ok_or("Interace not found.".to_owned())?;
+    let source_ip = source_ip.ok_or("IP address not configured.".to_owned())?;
 
     let mut ethernet_buffer = [0u8; PACKETSZ_ETHERNET + PACKETSZ_ARP];
     let mut ethernet_packet = MutableEthernetPacket::new(&mut ethernet_buffer).ok_or("Can't allocate Ethernet packet.".to_owned())?;
@@ -212,9 +217,10 @@ fn neigh_arp(interface: &NetworkInterface, target_ip: Ipv4Addr) -> Result<MacAdd
             return Ok(arp.get_sender_hw_addr());
         }
     }
-    // unreachable
+    // Unreachable.
 }
 
+/// Find network interface to discover target IPv4 address.
 fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) -> Result<&NetworkInterface, String> {
     for interface in interfaces {
         for ipn in &interface.ips {
@@ -231,6 +237,7 @@ fn find_interface_ipv4(interfaces: &Vec<NetworkInterface>, target_ip: Ipv4Addr) 
     Err("Interface not found.".to_owned())
 }
 
+/// Find network interface to discover target IPv6 address.
 fn find_interface_ipv6(interfaces: &Vec<NetworkInterface>, target_ip: Ipv6Addr) -> Result<&NetworkInterface, String> {
     for interface in interfaces {
         for ipn in &interface.ips {
@@ -258,6 +265,7 @@ struct CmdArgs {
     host: String,
 }
 
+/// main().
 fn main() {
     let args = CmdArgs::parse();
 
