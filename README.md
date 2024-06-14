@@ -4,6 +4,7 @@ Simple IPv6/v4 neighbor discovery tool for my Rust learning.
 
 ## Build and run
 
+For macOS.
 ```bash
 git clone https://github.com/hirokazutakahashi/neigh.git
 cd neigh
@@ -11,6 +12,8 @@ cargo build --release
 cd target/release
 ./neigh -h
 ```
+
+It uses [libpnet](https://github.com/libpnet/libpnet), so on Linux you need superuser privileges to run it. And on Windows, you need to install WinPcap or npcap as described [here](https://github.com/libpnet/libpnet?tab=readme-ov-file#windows).
 
 ## Using
 
